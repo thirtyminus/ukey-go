@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UKey 登录</title>
+<style>
+  :root {
+    --bg: #0f1115; --card: #171a21; --line: #262b36; --text: #e6e9ef;
+    --muted: #8b94a7; --ok: #3ecf8e; --err: #ff6b6b; --accent: #5b8cff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    background: radial-gradient(1200px 600px at 50% -10%, #1b2130, var(--bg));
+    color: var(--text);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  .card {
+    width: min(400px, 92vw); background: var(--card); border: 1px solid var(--line);
+    border-radius: 16px; padding: 32px 28px; box-shadow: 0 20px 60px rgba(0, 0, 0, .4);
+  }
+  h1 { margin: 0 0 4px; font-size: 20px; letter-spacing: .2px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  button {
+    width: 100%; border: 0; border-radius: 10px; padding: 13px; font-size: 15px;
+    font-weight: 600; cursor: pointer; background: var(--accent); color: #fff;
+    transition: filter .2s;
+  }
+  button:hover:not(:disabled) { filter: brightness(1.1); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
+  #status { margin-top: 16px; font-size: 13px; color: var(--muted); min-height: 22px; overflow-wrap: anywhere; }
+  #status.ok { color: var(--ok); }
+  #status.err { color: var(--err); }
+  .user { display: none; margin-top: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 14px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); margin-right: 8px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>UKey 网页登录</h1>
+  <div class="sub">插好 UKey 并启动本机 Agent 后点击登录</div>
+
+  <div id="loginBox">
+    <button id="loginBtn">使用 UKey 登录</button>
+  </div>
+
+  <div class="user" id="userBox">
+    <div><span class="dot"></span>已登录：<b id="who"></b></div>
+    <button class="ghost" id="logoutBtn" style="margin-top: 12px">退出登录</button>
+  </div>
+
+  <div id="status"></div>
+</div>
+<script>
+const params = new URLSearchParams(location.search);
+const AGENT = (params.get('agent') || 'http://127.0.0.1:18765').replace(/\/$/, '');
+
+const $ = (id) => document.getElementById(id);
+function status(msg, cls) {
+  const el = $('status');
+  el.textContent = msg;
+  el.className = cls || '';
+}
+
+async function postJSON(url, body) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {})
+  });
+  let data = {};
+  try { data = await res.json(); } catch (_) {}
+  if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+  return data;
+}
+
+function showLoggedIn(me) {
+  $('loginBox').style.display = 'none';
+  $('userBox').style.display = 'block';
+  $('who').textContent = me.subject || '已认证用户';
+}
+
+async function refresh() {
+  const me = await fetch('/api/me').then(r => r.json()).catch(() => ({ loggedIn: false }));
+  if (me.loggedIn) showLoggedIn(me);
+}
+
+async function login() {
+  const btn = $('loginBtn');
+  btn.disabled = true;
+  try {
+    status('检测本机 UKey 服务…');
+    let ping;
+    try {
+      const res = await fetch(AGENT + '/ping');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+      ping = data;
+    } catch (e) {
+      const reason = (e instanceof TypeError) ? '无法连接本机 Agent' : e.message;
+      status('UKey 不可用：' + reason + '，请插好 U 盘并确认 ukey-agent 已启动', 'err');
+      return;
+    }
+    status('已识别 UKey：' + String(ping.keyId).slice(0, 8) + '…');
+
+    const ch = await postJSON('/api/challenge', {});
+    status('等待 UKey 签名…');
+    const signed = await postJSON(AGENT + '/sign', { messageHex: ch.messageHex });
+
+    await postJSON('/api/login', { sessionId: ch.sessionId, signature: signed.signature });
+    status('登录成功', 'ok');
+    showLoggedIn({ subject: 'ukey-user' });
+    await refresh();
+  } catch (e) {
+    status('登录失败：' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function logout() {
+  await postJSON('/api/logout', {});
+  location.reload();
+}
+
+$('loginBtn').addEventListener('click', login);
+$('logoutBtn').addEventListener('click', logout);
+refresh();
+</script>
+</body>
+</html>
